@@ -98,14 +98,15 @@ class TdxReader:
                 record_data = data[offset:offset + record_size]
 
                 # 解包数据：小端模式
-                # 格式: i(日期) f(开) f(高) f(低) f(收) f(成交额) f(成交量) f(保留)
-                unpacked = struct.unpack('<iffffffI', record_data)
+                # 格式: i(日期) i(开) i(高) i(低) i(收) f(成交额) i(成交量) i(保留)
+                # 注意：价格是整数格式，需要除以100得到实际价格
+                unpacked = struct.unpack('<iiiiifii', record_data)
 
                 date_int = unpacked[0]
-                open_price = unpacked[1]
-                high_price = unpacked[2]
-                low_price = unpacked[3]
-                close_price = unpacked[4]
+                open_price = unpacked[1] / 100.0  # 除以100得到实际价格
+                high_price = unpacked[2] / 100.0
+                low_price = unpacked[3] / 100.0
+                close_price = unpacked[4] / 100.0
                 amount = unpacked[5]  # 成交额（元）
                 volume = unpacked[6]  # 成交量（手）
 
@@ -166,16 +167,17 @@ class TdxReader:
                 record_data = data[offset:offset + record_size]
 
                 # 新版格式解包
-                unpacked = struct.unpack('<i7fI', record_data[:40])
+                # 格式: i(日期) i(开) i(高) i(低) i(收) f(成交额) i(成交量) i(保留1) i(保留2) I(保留3)
+                # 价格是整数格式，需要除以100
+                unpacked = struct.unpack('<iiiiiifiiI', record_data[:36])
 
                 date_int = unpacked[0]
-                open_price = unpacked[1]
-                high_price = unpacked[2]
-                low_price = unpacked[3]
-                close_price = unpacked[4]
+                open_price = unpacked[1] / 100.0
+                high_price = unpacked[2] / 100.0
+                low_price = unpacked[3] / 100.0
+                close_price = unpacked[4] / 100.0
                 amount = unpacked[5]
                 volume = unpacked[6]
-                # 其他字段保留
 
                 if date_int == 0 or close_price <= 0:
                     continue
@@ -250,7 +252,7 @@ class TdxReader:
         df = df[~df.index.duplicated(keep='last')]
 
         # 填充缺失值
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        df = df.ffill().bfill()
 
         return df
 
@@ -351,8 +353,11 @@ class TdxReader:
 
             for f in files:
                 if f.endswith('.day') or f.endswith('.DAY'):
-                    # 提取6位股票代码
+                    # 提取6位股票代码（支持带市场前缀的文件名，如sh600487.day）
                     code = f.replace('.day', '').replace('.DAY', '')
+                    # 去掉市场前缀（sh/sz）
+                    if code.startswith('sh') or code.startswith('sz'):
+                        code = code[2:]
                     if code.isdigit() and len(code) == 6:
                         stock_codes.append(code)
 
@@ -477,12 +482,24 @@ class TdxReader:
         """
         # 构建文件路径
         code_6digit = code.zfill(6)
-        filename = f"{code_6digit}.day"
 
         if data_dir is None:
             return None
 
+        # 确定市场前缀
+        if code.startswith('6') or code.startswith('5'):
+            prefix = 'sh'
+        else:
+            prefix = 'sz'
+
+        # 尝试多种文件名格式
+        filename = f"{prefix}{code_6digit}.day"
         filepath = os.path.join(data_dir, filename)
+
+        # 如果文件不存在，尝试不带前缀的格式
+        if not os.path.exists(filepath):
+            filename = f"{code_6digit}.day"
+            filepath = os.path.join(data_dir, filename)
 
         # 读取日线数据
         df = cls.read_day_file(filepath)

@@ -8,7 +8,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 from .position import PositionManager
 from .order import OrderManager
-from ..data.data_loader import DataLoader
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class BacktestEngine:
@@ -28,7 +30,7 @@ class BacktestEngine:
                  stamp_duty_rate: float = 0.001,
                  slippage: float = 0.001,
                  max_positions: int = 5,
-                 stop_loss_pct: float = 0.08,
+                 stop_loss_pct: float = 0.05,
                  take_profit_pct: float = 0.25):
         """
         初始化回测引擎
@@ -72,20 +74,23 @@ class BacktestEngine:
         self.daily_records: List[Dict] = []  # 每日记录
         self.equity_curve: List[Dict] = []  # 净值曲线
 
-    def run(self, strategy, data_loader: DataLoader,
+        # 指定要处理的股票代码列表
+        self.target_stocks: List[str] = []
+
+    def run(self, strategy, memory_manager,
             start_date: str, end_date: str):
         """
         运行回测
 
         Args:
             strategy: 策略对象
-            data_loader: 数据加载器
+            memory_manager: 内存数据管理器
             start_date: 开始日期
             end_date: 结束日期
         """
         # 获取交易日期
         trading_dates = self._get_trading_dates(
-            data_loader, start_date, end_date
+            memory_manager, start_date, end_date
         )
 
         if not trading_dates:
@@ -95,14 +100,17 @@ class BacktestEngine:
         self.is_running = True
         self.current_date = trading_dates[0]
 
+        # 设置内存管理器引用
+        self.memory_manager = memory_manager
+
         # 初始化策略
         if hasattr(strategy, 'on_init'):
-            strategy.on_init(self, data_loader)
+            strategy.on_init(self, memory_manager)
 
         # 逐日回测
         for date in trading_dates:
             self.current_date = date
-            self._process_day(date, strategy, data_loader)
+            self._process_day(date, strategy, memory_manager)
 
         # 结束策略
         if hasattr(strategy, 'on_exit'):
@@ -110,23 +118,31 @@ class BacktestEngine:
 
         self.is_running = False
 
-    def _get_trading_dates(self, data_loader: DataLoader,
+    def _get_trading_dates(self, memory_manager,
                            start_date: str, end_date: str) -> List[pd.Timestamp]:
         """获取交易日期列表"""
-        dates = data_loader.get_trading_dates(start_date, end_date)
+        # 从内存数据中获取所有交易日期
+        all_dates = set()
+
+        for code in memory_manager.get_all_codes():
+            df = memory_manager.get_stock_data(code, start_date, end_date)
+            if df is not None:
+                all_dates.update(df.index)
+
+        dates = sorted(all_dates)
         return dates
 
-    def _process_day(self, date: pd.Timestamp, strategy, data_loader: DataLoader):
+    def _process_day(self, date: pd.Timestamp, strategy, memory_manager):
         """
         处理单个交易日
 
         Args:
             date: 交易日期
             strategy: 策略对象
-            data_loader: 数据加载器
+            memory_manager: 内存数据管理器
         """
         # 获取当日数据
-        bar_data = self._get_bar_data(date, data_loader)
+        bar_data = self._get_bar_data(date, memory_manager)
 
         if not bar_data:
             return
@@ -145,13 +161,13 @@ class BacktestEngine:
         self._record_daily_state(date, bar_data)
 
     def _get_bar_data(self, date: pd.Timestamp,
-                      data_loader: DataLoader) -> Dict[str, pd.Series]:
+                      memory_manager) -> Dict[str, pd.Series]:
         """
         获取当日所有股票的行情数据
 
         Args:
             date: 交易日期
-            data_loader: 数据加载器
+            memory_manager: 内存数据管理器
 
         Returns:
             股票代码到行情数据的映射
@@ -165,10 +181,15 @@ class BacktestEngine:
         if hasattr(self, '_candidate_stocks'):
             codes.update(self._candidate_stocks)
 
+        # 添加目标股票列表
+        if hasattr(self, 'target_stocks') and self.target_stocks:
+            codes.update(self.target_stocks)
+
         for code in codes:
-            df = data_loader.get_stock_data(code)
-            if df is not None and date in df.index:
-                bar_data[code] = df.loc[date]
+            # 从内存管理器获取当日行情（数据已前复权）
+            bar = memory_manager.get_bar(code, date)
+            if bar is not None:
+                bar_data[code] = bar
 
         return bar_data
 

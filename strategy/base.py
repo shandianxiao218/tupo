@@ -25,18 +25,18 @@ class BaseStrategy(ABC):
         """
         self.name = name
         self.engine = None
-        self.data_loader = None
+        self.memory_manager = None
 
-    def on_init(self, engine, data_loader):
+    def on_init(self, engine, memory_manager):
         """
         策略初始化回调
 
         Args:
             engine: 回测引擎
-            data_loader: 数据加载器
+            memory_manager: 内存数据管理器
         """
         self.engine = engine
-        self.data_loader = data_loader
+        self.memory_manager = memory_manager
 
     def on_exit(self, engine):
         """
@@ -170,15 +170,16 @@ class BaseStrategy(ABC):
             code: 股票代码
             start_date: 开始日期
             end_date: 结束日期
-            qfq: 是否前复权
+            qfq: 是否前复权（内存数据已前复权，此参数忽略）
 
         Returns:
             股票数据DataFrame
         """
-        if self.data_loader is None:
+        if self.memory_manager is None:
             return None
 
-        return self.data_loader.get_stock_data(code, start_date, end_date, qfq)
+        # 内存数据已经过前复权处理
+        return self.memory_manager.get_stock_data(code, start_date, end_date)
 
 
 class SimpleBuyAndHoldStrategy(BaseStrategy):

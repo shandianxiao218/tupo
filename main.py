@@ -64,7 +64,7 @@ def parse_args():
                        help='最小回调幅度（用于均线聚拢策略）')
     parser.add_argument('--max-pullback', type=float, default=0.15,
                        help='最大回调幅度（用于均线聚拢策略）')
-    parser.add_argument('--convergence', type=float, default=0.05,
+    parser.add_argument('--convergence', type=float, default=0.03,
                        help='均线粘合度阈值（用于均线聚拢策略）')
     parser.add_argument('--volume-ratio', type=float, default=1.5,
                        help='成交量放大倍数（用于均线聚拢策略）')
@@ -102,8 +102,6 @@ def create_strategy(args):
         strategy = MAConvergenceBreakoutStrategy(
             lookback_days=args.lookback_days,
             min_rise_pct=args.min_rise,
-            min_pullback=args.min_pullback,
-            max_pullback=args.max_pullback,
             convergence_pct=args.convergence,
             volume_ratio=args.volume_ratio,
             stop_loss_pct=args.stop_loss,
@@ -160,36 +158,62 @@ def main():
     if not check_data_dirs(args.sz_data, args.sh_data):
         return 1
 
-    # 创建数据加载器
+    # 创建内存数据管理器
     if args.verbose:
-        print("初始化数据加载器...")
+        print("初始化内存数据管理器...")
 
-    data_loader = DataLoader(
-        sz_data_dir=args.sz_data,
+    from data import MemoryDataManager
+
+    memory_manager = MemoryDataManager(
         sh_data_dir=args.sh_data,
-        sz_xr_dir=args.sz_xr,
-        sh_xr_dir=args.sh_xr,
-        use_cache=True,
-        cache_dir="cache"
+        sz_data_dir=args.sz_data
     )
 
-    # 检查数据
-    all_codes = data_loader.get_all_stock_codes()
+    # 加载股票数据到内存
     if args.verbose:
-        print(f"找到 {len(all_codes)} 只股票")
+        print("加载股票数据到内存（进行前复权处理）...")
 
-    if len(all_codes) == 0:
-        print("错误: 没有找到任何股票数据")
+    # 确定要加载的股票
+    if args.stocks:
+        codes = [code.zfill(6) for code in args.stocks]
+    else:
+        # 获取所有股票代码
+        all_codes = []
+        if os.path.exists(args.sh_data):
+            for f in os.listdir(args.sh_data):
+                if f.endswith('.day'):
+                    code = f.replace('sh', '').replace('.day', '')
+                    if code.isdigit() and len(code) == 6:
+                        all_codes.append(code)
+        if os.path.exists(args.sz_data):
+            for f in os.listdir(args.sz_data):
+                if f.endswith('.day'):
+                    code = f.replace('sz', '').replace('.day', '')
+                    if code.isdigit() and len(code) == 6:
+                        all_codes.append(code)
+        codes = all_codes
+
+    if args.verbose:
+        print(f"准备加载 {len(codes)} 只股票的数据...")
+
+    # 加载数据到内存
+    loaded_count = memory_manager.load_all_data(codes)
+
+    if args.verbose:
+        print(f"成功加载 {loaded_count} 只股票的数据（已前复权）")
+
+    if loaded_count == 0:
+        print("错误: 没有加载到任何股票数据")
         return 1
 
     # 如果指定了股票，只使用指定的
     if args.stocks:
         codes = [code.zfill(6) for code in args.stocks]
-        codes = [c for c in codes if c in all_codes]
+        codes = [c for c in codes if c in memory_manager.get_all_codes()]
         if args.verbose:
             print(f"使用指定股票: {codes}")
     else:
-        codes = all_codes
+        codes = memory_manager.get_all_codes()
 
     # 创建策略
     if args.verbose:
@@ -213,13 +237,17 @@ def main():
         take_profit_pct=args.take_profit
     )
 
+    # 设置目标股票列表
+    if args.stocks:
+        engine.target_stocks = [code.zfill(6) for code in args.stocks]
+
     # 运行回测
     if args.verbose:
         print("开始回测...")
         print()
 
     try:
-        engine.run(strategy, data_loader, args.start_date, args.end_date)
+        engine.run(strategy, memory_manager, args.start_date, args.end_date)
     except Exception as e:
         print(f"回测过程中发生错误: {e}")
         import traceback
@@ -272,7 +300,7 @@ def main():
 
         # 导出数据
         trades_file = os.path.join(args.output_dir, f"{strategy_name}_trades.csv")
-        report_gen.export_trades(engine.get_trades(), trades_file)
+        report_gen.export_trades(engine.get_trades(), trades_file, engine, memory_manager)
 
         equity_file = os.path.join(args.output_dir, f"{strategy_name}_equity.csv")
         report_gen.export_equity(engine.get_equity_curve(), equity_file)

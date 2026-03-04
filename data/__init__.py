@@ -5,5 +5,6 @@
 
 from .tdx_reader import TdxReader
 from .data_loader import DataLoader
+from .memory_data_manager import MemoryDataManager
 
-__all__ = ["TdxReader", "DataLoader"]
+__all__ = ["TdxReader", "DataLoader", "MemoryDataManager"]

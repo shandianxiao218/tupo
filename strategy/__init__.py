@@ -5,6 +5,6 @@
 
 from .base import BaseStrategy
 from .signals import SignalGenerator
-from .selector import MAConvergenceBreakoutStrategy
+from .selector import MAConvergenceBreakoutStrategy, SimpleMAStrategy
 
-__all__ = ["BaseStrategy", "SignalGenerator", "MAConvergenceBreakoutStrategy"]
+__all__ = ["BaseStrategy", "SignalGenerator", "MAConvergenceBreakoutStrategy", "SimpleMAStrategy"]

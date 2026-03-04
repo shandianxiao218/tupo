@@ -72,6 +72,7 @@ class ReportGenerator:
 
         # 导出交易记录
         trades_file = os.path.join(self.output_dir, f"{prefix}_trades.csv")
+        # 注意: generate_full_report 没有engine参数，所以不传engine和memory_manager
         self.export_trades(trades_df, trades_file)
         report_info['trades'] = trades_file
 
@@ -265,19 +266,88 @@ class ReportGenerator:
 
         plt.close()
 
-    def export_trades(self, trades_df: pd.DataFrame, output_file: str):
+    def export_trades(self, trades_df: pd.DataFrame, output_file: str,
+                     engine=None, memory_manager=None):
         """
         导出交易记录到CSV
 
         Args:
             trades_df: 交易记录DataFrame
             output_file: 输出文件路径
+            engine: 回测引擎（用于获取持仓信息）
+            memory_manager: 内存数据管理器（用于获取最新价格）
         """
         if trades_df is None or len(trades_df) == 0:
             print("没有交易记录")
             return
 
-        trades_df.to_csv(output_file, index=False, encoding='utf-8-sig')
+        # 复制交易记录
+        export_df = trades_df.copy()
+
+        # 如果提供了engine和memory_manager，添加持仓浮动盈亏信息
+        if engine is not None and memory_manager is not None:
+            position_codes = engine.get_position_codes()
+
+            if position_codes:
+                # 获取股票的最新日期
+                latest_date = engine.current_date
+
+                for code in position_codes:
+                    position = engine.position_manager.get_position(code)
+
+                    # 获取最新价格
+                    stock_data = memory_manager.get_stock_data(code)
+                    if stock_data is not None and len(stock_data) > 0:
+                        # 获取最新的收盘价
+                        latest_price = stock_data.iloc[-1]['close']
+                        latest_date_str = stock_data.index[-1].strftime('%Y-%m-%d')
+
+                        # 计算浮动盈亏
+                        cost_amount = position.avg_cost * position.shares
+                        market_value = latest_price * position.shares
+                        float_profit = market_value - cost_amount
+                        float_profit_pct = (float_profit / cost_amount * 100) if cost_amount > 0 else 0
+
+                        # 计算持仓天数
+                        if position.buy_date:
+                            hold_days = (latest_date - position.buy_date).days
+                        else:
+                            hold_days = 0
+
+                        # 查找对应的买入记录以获取买入信息
+                        buy_trades = trades_df[(trades_df['code'] == code) &
+                                              (trades_df['direction'] == 'buy')]
+                        if len(buy_trades) > 0:
+                            last_buy = buy_trades.iloc[-1]
+                            buy_reason = last_buy.get('reason', '')
+                        else:
+                            buy_reason = ''
+
+                        # 创建持仓中记录
+                        holding_record = {
+                            'code': code,
+                            'date': latest_date,
+                            'direction': 'holding',
+                            'shares': position.shares,
+                            'price': position.avg_cost,
+                            'amount': cost_amount,
+                            'commission': 0,
+                            'cash': '',
+                            'reason': f'{buy_reason} [最新价:{latest_price:.2f}]',
+                            'cost': cost_amount,
+                            'profit_loss': float_profit,
+                            'profit_loss_pct': float_profit_pct,
+                            'hold_days': hold_days,
+                            'stamp_duty': 0
+                        }
+
+                        # 添加到导出数据
+                        export_df = pd.concat([
+                            export_df,
+                            pd.DataFrame([holding_record])
+                        ], ignore_index=True)
+
+        export_df.to_csv(output_file, index=False, encoding='utf-8-sig')
         print(f"交易记录已导出到: {output_file}")
 
     def export_equity(self, equity_df: pd.DataFrame, output_file: str):
